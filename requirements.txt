@@ -1,0 +1,4 @@
+aiohttp
+schedule
+pytest
+pytest-asyncio
