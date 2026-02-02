@@ -1,0 +1,75 @@
+name: AI Agent - Respond to /ai commands
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write           # to post comments
+  pull-requests: write    # if you also want to support PR comments
+  contents: read          # to checkout repo (useful if agent reads code)
+  models: read            # required for GitHub Models access
+
+jobs:
+  agent:
+    if: |
+      github.event.comment.body != '' &&
+      startsWith(github.event.comment.body, '/ai ') &&
+      github.event.comment.user.login != github.event.repository.owner.login  # optional: ignore bot/self
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # optional: if your agent.py needs git history
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install langchain langchain-openai langchain-community  # adjust to what agent.py actually needs
+          # Note: langchain-openai still works with GitHub Models endpoint if you patch base_url
+
+      - name: Prepare prompt context
+        run: |
+          # You can expand this – e.g. include issue title/body, recent comments, code snippets...
+          echo "User said: ${{ github.event.comment.body }}" > prompt.txt
+          echo "" >> prompt.txt
+          echo "Repository: ${{ github.repository }}" >> prompt.txt
+          echo "Issue/PR #${{ github.event.issue.number }}" >> prompt.txt
+          echo "Title: ${{ github.event.issue.title }}" >> prompt.txt
+          echo "" >> prompt.txt
+          echo "You are a helpful AI coding assistant." >> prompt.txt
+
+      - name: Run AI inference via GitHub Models
+        id: inference
+        uses: actions/ai-inference@v2   # check https://github.com/actions/ai-inference for exact latest tag
+        with:
+          model: openai/gpt-4o-mini       # or anthropic/claude-3.5-sonnet, mistralai/mistral-large, etc.
+          prompt-file: prompt.txt
+          # system-prompt: "You are a concise, expert software engineer..."   # optional
+          # max-tokens: 1200
+          # temperature: 0.7
+
+      - name: Post AI response as comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const response = `${{ steps.inference.outputs.completion }}`.trim();
+            if (!response) {
+              console.log("No response from model");
+              return;
+            }
+            const body = `**AI Agent response**\n\n${response}\n\n(Triggered by /ai command)`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });
